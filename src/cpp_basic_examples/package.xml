@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>cpp_basic_examples</name>
+  <version>0.0.1</version>
+  <description>ROS 2 C++ 기초 퍼블리셔/서브스크라이버 예제</description>
+
+  <maintainer email="todo@example.com">TODO:Update</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
