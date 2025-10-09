@@ -1,48 +1,37 @@
 # Copyright (c) 2019, Bosch Engineering Center Cluj and BFMC orginazers
 # All rights reserved.
-
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-
-# 1. Redistributions of source code must retain the above copyright notice, this
-#    list of conditions and the following disclaimer.
-
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-#    this list of conditions and the following disclaimer in the documentation
-#    and/or other materials provided with the distribution.
-
-# 3. Neither the name of the copyright holder nor the names of its
-#    contributors may be used to endorse or promote products derived from
-#    this software without specific prior written permission.
-
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
 if __name__ == "__main__":
     import sys
     sys.path.insert(0, "../../..")
 
-
-import psutil, json, logging, inspect, eventlet
-from flask import Flask, request
-from flask_socketio import SocketIO, emit
-from flask_cors import CORS
+import os
+import re
+import json
+import psutil
+import logging
+import inspect
+import subprocess
+from pathlib import Path
 from enum import Enum
+from flask import Flask, request
+from flask_cors import CORS
+from flask_socketio import SocketIO, emit
+
 from src.utils.messages.messageHandlerSubscriber import messageHandlerSubscriber
 from src.utils.messages.messageHandlerSender import messageHandlerSender
 from src.templates.workerprocess import WorkerProcess
 from src.utils.messages.allMessages import Semaphores
-from src.dashboard.threads.threadStartFrontend import ThreadStartFrontend  
+from src.dashboard.threads.threadStartFrontend import ThreadStartFrontend
 import src.utils.messages.allMessages as allMessages
 
+# ------------------------ Async backend selection (eventlet -> threading fallback) ------------------------
+_ASYNC_MODE = os.getenv("DASHBOARD_ASYNC", "eventlet").lower()
+if _ASYNC_MODE == "eventlet":
+    try:
+        import eventlet  # noqa: F401
+        _ASYNC_MODE = "eventlet"
+    except Exception:
+        _ASYNC_MODE = "threading"
 
 class processDashboard(WorkerProcess):
     """대시보드 프로세스 전반을 담당하며 시스템 상태를 UI에 반영한다.
@@ -52,7 +41,7 @@ class processDashboard(WorkerProcess):
         deviceID (int): 대상 장치 식별자.
     """
     # ====================================== INIT ==========================================
-    def __init__(self, queueList, logging, debugging = False):
+    def __init__(self, queueList, logging, debugging=False):
         super(processDashboard, self).__init__(queueList)
         self.running = True
         self.queueList = queueList
@@ -65,14 +54,14 @@ class processDashboard(WorkerProcess):
 
         self.memoryUsage = 0
         self.cpuCoreUsage = 0
-        self.cpuTemperature = 0
+        self.cpuTemperature = -1  # unknown
 
         self.sessionActive = False
         self.activeUser = None
 
         # setup Flask and SocketIO
         self.app = Flask(__name__)
-        self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode='eventlet')
+        self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode=_ASYNC_MODE)
         CORS(self.app, supports_credentials=True)
 
         # 메시지 맵 구성 후 대시보드에서 직접 다루지 않는 항목 제거
@@ -88,9 +77,17 @@ class processDashboard(WorkerProcess):
 
         # start hardware monitoring and continuous message sending
         self.sendContinuousHardwareData()
-        eventlet.spawn(self.sendContinuousMessages)
+        # spawn sender loop
+        if self.socketio.async_mode == "eventlet":
+            import eventlet
+            eventlet.spawn(self.sendContinuousMessages)
+        else:
+            # threading fallback
+            import threading
+            threading.Thread(target=self.sendContinuousMessages, daemon=True).start()
+
         super(processDashboard, self).__init__(self.queueList)
-        
+
     # ===================================== STOP ==========================================
     def stop(self):
         super(processDashboard, self).stop()
@@ -166,21 +163,27 @@ class processDashboard(WorkerProcess):
             self.sessionActive = False
             self.activeUser = None
 
+    # ------------------------ File path helpers (RPi 경로 제거) ------------------------
+    @staticmethod
+    def _table_state_path() -> Path:
+        # 사용자 홈 하위로 저장 (없으면 생성)
+        base = Path.home() / ".cache" / "Brain" / "dashboard"
+        base.mkdir(parents=True, exist_ok=True)
+        return base / "table_state.json"
+
     def handleSaveTableState(self, data):
         """대시보드 테이블 상태를 JSON 파일로 저장한다."""
         if self.debugging:
             self.logger.info("Received save message: " + data)
 
         dataDict = json.loads(data)
-        file_path = '/home/pi/Brain/src/utils/table_state.json'  # change as necessary
-
+        file_path = self._table_state_path()
         with open(file_path, 'w') as json_file:
             json.dump(dataDict, json_file, indent=4)
 
     def handleLoadTableState(self, data):
         """저장된 테이블 상태를 읽어 프론트엔드로 돌려준다."""
-        file_path = '/home/pi/Brain/src/utils/table_state.json'  # change as necessary
-
+        file_path = self._table_state_path()
         try:
             with open(file_path, 'r') as json_file:
                 dataDict = json.load(json_file)
@@ -190,18 +193,115 @@ class processDashboard(WorkerProcess):
         except json.JSONDecodeError:
             emit('response', {'error': 'Failed to parse JSON data from the file.'})
 
+    # ------------------------ Jetson-safe temperature readers ------------------------
+    @staticmethod
+    def _safe_cpu_temp() -> int | None:
+        """Jetson/일반 리눅스에서 안전하게 CPU(혹은 대표) 온도(°C 정수)를 반환. 실패 시 None."""
+        # 1) psutil 우선
+        try:
+            temps = psutil.sensors_temperatures(fahrenheit=False) or {}
+            preferred_keys = (
+                'cpu_thermal', 'cpu-thermal', 'soc_thermal', 'soc-thermal',
+                'coretemp', 'acpitz', 'k10temp', 'thermal-fan-est', 'GPU-therm'
+            )
+            # 우선 키 탐색
+            for k in preferred_keys:
+                entries = temps.get(k)
+                if not entries:
+                    continue
+                for e in entries:
+                    cur = getattr(e, "current", None)
+                    if cur is not None:
+                        try:
+                            return round(float(cur))
+                        except Exception:
+                            pass
+            # 전체에서 최대값(대표치) 선택
+            candidates = []
+            for _, entries in temps.items():
+                for e in entries:
+                    cur = getattr(e, "current", None)
+                    if cur is not None:
+                        try:
+                            candidates.append(float(cur))
+                        except Exception:
+                            continue
+            if candidates:
+                return round(max(candidates))
+        except Exception:
+            pass
+
+        # 2) tegrastats 파싱 (Jetson)
+        try:
+            out = subprocess.check_output(["tegrastats", "--interval", "1000", "--once"], text=True, timeout=2)
+            # 예: CPU@39.5C GPU@38.0C AO@... 형식에서 첫 숫자 추출
+            m = re.search(r"CPU@(\d+(?:\.\d+)?)C", out)
+            if not m:
+                m = re.search(r"GPU@(\d+(?:\.\d+)?)C", out)
+            if m:
+                return round(float(m.group(1)))
+        except Exception:
+            pass
+
+        # 3) /sys/class/thermal 직접
+        try:
+            tz_base = Path("/sys/class/thermal")
+            candidates = []
+            if tz_base.exists():
+                for tz in tz_base.glob("thermal_zone*/temp"):
+                    try:
+                        s = tz.read_text().strip()
+                        if s:
+                            candidates.append(float(s) / 1000.0)
+                    except Exception:
+                        continue
+            if candidates:
+                return round(max(candidates))
+        except Exception:
+            pass
+
+        return None
+
     def sendContinuousHardwareData(self):
         """주기적으로 시스템 자원 정보를 수집한다."""
-        self.memoryUsage = psutil.virtual_memory().percent
-        self.cpuCoreUsage = psutil.cpu_percent(interval=0.05, percpu=True)
-        self.cpuTemperature = round(psutil.sensors_temperatures()['cpu_thermal'][0].current)
-        eventlet.spawn_after(1, self.sendContinuousHardwareData)
+        try:
+            self.memoryUsage = psutil.virtual_memory().percent
+        except Exception:
+            self.memoryUsage = -1
+
+        try:
+            # 빠르게 반환하려면 interval=0.0; 부하 줄이려면 소폭 대기
+            self.cpuCoreUsage = psutil.cpu_percent(interval=0.05, percpu=True)
+        except Exception:
+            self.cpuCoreUsage = []
+
+        try:
+            t = self._safe_cpu_temp()
+            self.cpuTemperature = int(t) if t is not None else -1
+        except Exception:
+            self.cpuTemperature = -1
+
+        # 재스케줄
+        if self.socketio.async_mode == "eventlet":
+            import eventlet
+            eventlet.spawn_after(1, self.sendContinuousHardwareData)
+        else:
+            import threading, time
+            threading.Timer(1.0, self.sendContinuousHardwareData).start()
 
     def sendContinuousMessages(self):
         """수집된 메시지와 하드웨어 상태를 지속적으로 프론트엔드에 전송한다."""
-        counter = 0
+        counter = 0.0
         socketSleep = 0.1
-        sendTime = 1
+        sendTime = 1.0
+
+        sleeper = None
+        if self.socketio.async_mode == "eventlet":
+            import eventlet
+            def _sleep(dt): eventlet.sleep(dt)
+        else:
+            import time
+            def _sleep(dt): time.sleep(dt)
 
         while self.running:
             for msg, subscriber in self.messages.items():
@@ -215,11 +315,11 @@ class processDashboard(WorkerProcess):
             if counter >= sendTime:
                 self.socketio.emit('memory_channel', {'data': self.memoryUsage})
                 self.socketio.emit('cpu_channel', {'data': {'usage': self.cpuCoreUsage, 'temp': self.cpuTemperature}})
-                counter = 0
+                counter = 0.0
             else:
                 counter += socketSleep
 
-            eventlet.sleep(socketSleep)
+            _sleep(socketSleep)
 
     # ===================================== INIT TH ======================================
     def _init_threads(self):
