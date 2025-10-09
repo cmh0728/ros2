@@ -37,11 +37,11 @@ from multiprocessing import Pipe
 
 
 class processCamera(WorkerProcess):
-    """This process handle camera.\n
+    """카메라 스레드를 묶어서 관리하는 워커 프로세스.
     Args:
-            queueList (dictionar of multiprocessing.queues.Queue): Dictionar of queues where the ID is the type of messages.
-            logging (logging object): Made for debugging.
-            debugging (bool, optional): A flag for debugging. Defaults to False.
+        queueList (dict[multiprocessing.Queue]): 메시지 타입별 큐 모음.
+        logging (logging.Logger): 디버깅용 로거.
+        debugging (bool): 디버그 로그 활성화 여부.
     """
 
     # ====================================== INIT ==========================================
@@ -53,12 +53,12 @@ class processCamera(WorkerProcess):
 
     # ===================================== RUN ==========================================
     def run(self):
-        """Apply the initializing methods and start the threads."""
+        """필요한 초기화 후 스레드를 시작한다."""
         super(processCamera, self).run()
 
     # ===================================== INIT TH ======================================
     def _init_threads(self):
-        """Create the Camera Publisher thread and add to the list of threads."""
+        """카메라 퍼블리셔 스레드를 생성해 워커 관리 리스트에 등록한다."""
         camTh = threadCamera(
          self.queuesList, self.logging, self.debugging
         )
@@ -98,6 +98,7 @@ if __name__ == "__main__":
     if debugg:
         logger.warning("getting")
     img = {"msgValue": 1}
+    # 제너럴 큐에서 카메라 프레임(문자열) 수신될 때까지 대기
     while type(img["msgValue"]) != type(":text"):
         img = queueList["General"].get()
     image_data = base64.b64decode(img["msgValue"])

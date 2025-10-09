@@ -61,7 +61,7 @@ logging.basicConfig(level=logging.INFO)
 
 from src.gateway.processGateway import processGateway
 from src.dashboard.processDashboard import processDashboard
-# from src.hardware.camera.processCamera import processCamera
+from src.hardware.camera.processCamera import processCamera
 from src.hardware.serialhandler.processSerialHandler import processSerialHandler
 from src.data.Semaphores.Semaphores import processSemaphores
 from src.data.TrafficCommunication.processTrafficCommunication import processTrafficCommunication
@@ -85,7 +85,7 @@ logging = logging.getLogger()
 
 # 모듈별 실행 여부를 제어하는 플래그
 Dashboard = True
-Camera = False
+Camera = True
 Semaphores = False
 TrafficCommunication = False
 SerialHandler = True
