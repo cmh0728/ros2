@@ -68,6 +68,7 @@ export class KlSwitchComponent {
     });
   }
 
+  // kl 30 일때만 웹소켓으로 데이터를 보내고, 이 값이 python 백엔드로 전달되어 kl상태를 바꿈.
   setState(index: number) {
     if (this.currentState == '30' && this.currentState != this.states[index]) {
     }

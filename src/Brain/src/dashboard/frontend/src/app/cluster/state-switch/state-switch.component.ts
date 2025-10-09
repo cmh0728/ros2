@@ -74,7 +74,7 @@ export class StateSwitchComponent {
 
   @HostListener('window:keydown', ['$event'])
   handleKeyDown(event: KeyboardEvent) {
-    if (this.currentState == 'manual') {
+    if (this.currentState == 'manual') { // manual 모드일때만 입력 받음
 
       if (this.activeKey === event.key)
         return;
@@ -106,6 +106,7 @@ export class StateSwitchComponent {
           break;
       }
     }
+    
   }
 
   @HostListener('window:keyup', ['$event'])

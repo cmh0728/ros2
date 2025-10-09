@@ -38,6 +38,7 @@ from src.utils.messages.allMessages import (
     SteerMotor,
     SpeedMotor,
     Brake,
+    DrivingMode,
     ToggleBatteryLvl,
     ToggleImuData,
     ToggleInstant,
@@ -69,6 +70,8 @@ class threadWrite(ThreadWithStop):
 
         self.running = False
         self.engineEnabled = False
+        self.forceStop = False
+        self.stopApplied = False
         self.messageConverter = MessageConverter()
         self.steerMotorSender = messageHandlerSender(self.queuesList, SteerMotor)
         self.speedMotorSender = messageHandlerSender(self.queuesList, SpeedMotor)
@@ -87,6 +90,7 @@ class threadWrite(ThreadWithStop):
         """Subscribe function. In this function we make all the required subscribe to process gateway"""
 
         self.klSubscriber = messageHandlerSubscriber(self.queuesList, Klem, "lastOnly", True)
+        self.drivingModeSubscriber = messageHandlerSubscriber(self.queuesList, DrivingMode, "lastOnly", True)
         self.controlSubscriber = messageHandlerSubscriber(self.queuesList, Control, "lastOnly", True)
         self.steerMotorSubscriber = messageHandlerSubscriber(self.queuesList, SteerMotor, "lastOnly", True)
         self.speedMotorSubscriber = messageHandlerSubscriber(self.queuesList, SpeedMotor, "lastOnly", True)
@@ -127,13 +131,40 @@ class threadWrite(ThreadWithStop):
             return 1
         else :
             return 0
+
+    def _handleDrivingMode(self, mode):
+        modeLower = mode.lower()
+        if modeLower == "stop":
+            self.forceStop = True
+            if not self.stopApplied:
+                self._applyStopCommands()
+                self.stopApplied = True
+        else:
+            self.forceStop = False
+            self.stopApplied = False
+
+    def _applyStopCommands(self):
+        """Send zeroed commands to guarantee the vehicle halts."""
+        try:
+            self.sendToSerial({"action": "speed", "speed": 0})
+            self.sendToSerial({"action": "steer", "steerAngle": 0})
+            self.sendToSerial({"action": "brake", "steerAngle": 0})
+        except Exception as exc:
+            if self.debugger:
+                self.logger.error(f"Failed to apply stop commands: {exc}")
         
     # ===================================== RUN ==========================================
-    def run(self):
+    def run(self): # kl이 30일때만 engineEnabled True가 됨. 
         """In this function we check if we got the enable engine signal. After we got it we will start getting messages from raspberry PI. It will transform them into NUCLEO commands and send them."""
 
         while self._running:
             try:
+                drivingModeRecv = self.drivingModeSubscriber.receive()
+                if drivingModeRecv is not None:
+                    if self.debugger:
+                        self.logger.info(drivingModeRecv)
+                    self._handleDrivingMode(drivingModeRecv)
+
                 klRecv = self.klSubscriber.receive()
                 if klRecv is not None:
                     if self.debugger:
@@ -156,7 +187,7 @@ class threadWrite(ThreadWithStop):
                         command = {"action": "kl", "mode": 0}
                         self.sendToSerial(command)
 
-                if self.running:
+                if self.running and not self.forceStop:
                     if self.engineEnabled:
                         brakeRecv = self.brakeSubscriber.receive()
                         if brakeRecv is not None:

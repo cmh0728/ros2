@@ -102,7 +102,7 @@ class processDashboard(WorkerProcess):
             if name != "Enum" and issubclass(cls, Enum):
                 self.messagesAndVals[name] = {"enum": cls, "owner": cls.Owner.value}
 
-    def sendMessageToBackend(self, dataName, dataDict):
+    def sendMessageToBackend(self, dataName, dataDict): # gateway 큐로 데이터 전송 하는 부분 , threadWrite가 구독
         """프론트엔드로부터 받은 데이터를 해당 백엔드 채널로 전달한다."""
         if dataName in self.sendMessages:
             self.sendMessages[dataName]["obj"].send(dataDict.get("Value"))

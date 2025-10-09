@@ -33,3 +33,4 @@ dist/
 # Editor settings
 .vscode/
 .idea/
+.DS_Store
