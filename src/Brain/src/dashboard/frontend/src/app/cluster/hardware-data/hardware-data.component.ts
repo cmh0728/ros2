@@ -26,7 +26,7 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import { Component } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { Subscription } from 'rxjs';
 import { WebSocketService} from '../../webSocket/web-socket.service'
 import { IndicatorComponent } from './indicator/indicator.component';
@@ -38,28 +38,30 @@ import { IndicatorComponent } from './indicator/indicator.component';
   templateUrl: './hardware-data.component.html',
   styleUrl: './hardware-data.component.css'
 })
-export class HardwareDataComponent {
+export class HardwareDataComponent implements OnInit, OnDestroy {
   private cpuSubscription: Subscription | undefined;
   private memorySubscription: Subscription | undefined;
   private resourceSubscription: Subscription | undefined;
   public cpuTemp: number = 0;
-  public cpuUsage: number[] = [0, 0, 0, 0];
+  public cpuUsage: number[] = [];
   public memoryUsage: number = 0;
   public heap: number = 0;
   public stack: number = 0;
+  public coreCount: number = 0;
   
   constructor(private  webSocketService: WebSocketService) { }
 
-  ngOnInit()
+  ngOnInit(): void
   {
     // Listen for cpu data
     this.cpuSubscription = this.webSocketService.receiveCpuUsage().subscribe(
       (message) => {
-        this.cpuTemp = message['data']['temp'];
-        this.cpuUsage[0] = parseInt(message['data']['usage'][0]);
-        this.cpuUsage[1] = parseInt(message['data']['usage'][1]);
-        this.cpuUsage[2] = parseInt(message['data']['usage'][2]);
-        this.cpuUsage[3] = parseInt(message['data']['usage'][3]);
+        const data = message?.data ?? {};
+        const usageArray = Array.isArray(data.usage) ? data.usage : [];
+        this.cpuUsage = usageArray.map((value: any) => Math.round(Number(value) || 0));
+        const coreCount = Number(data.coreCount);
+        this.coreCount = Number.isFinite(coreCount) && coreCount > 0 ? coreCount : this.cpuUsage.length;
+        this.cpuTemp = Math.round(Number(data.temp) || 0);
       },
       (error) => {
         console.error('Error receiving disk usage:', error);
@@ -87,7 +89,7 @@ export class HardwareDataComponent {
     );
   }
 
-  ngOnDestroy() {
+  ngOnDestroy(): void {
     if (this.cpuSubscription) {
       this.cpuSubscription.unsubscribe();
     }

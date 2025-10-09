@@ -247,7 +247,7 @@ class processDashboard(WorkerProcess):
     def sendContinuousHardwareData(self):
         """주기적으로 시스템 자원 정보를 수집한다."""
         self.memoryUsage = psutil.virtual_memory().percent
-        self.cpuCoreUsage = psutil.cpu_percent(interval=0.05, percpu=True)
+        self.cpuCoreUsage = [round(v, 1) for v in psutil.cpu_percent(interval=0.05, percpu=True)]
 
         # 기존 한 줄을 Jetson-safe 로 교체. (채널/형식 동일)
         try:
@@ -275,7 +275,7 @@ class processDashboard(WorkerProcess):
             # 일정 주기마다 자원 사용률을 별도 채널로 전송 (변경 없음)
             if counter >= sendTime:
                 self.socketio.emit('memory_channel', {'data': self.memoryUsage})
-                self.socketio.emit('cpu_channel', {'data': {'usage': self.cpuCoreUsage, 'temp': self.cpuTemperature}})
+                self.socketio.emit('cpu_channel', {'data': {'usage': self.cpuCoreUsage, 'temp': self.cpuTemperature, 'coreCount': len(self.cpuCoreUsage)}})
                 counter = 0
             else:
                 counter += socketSleep
