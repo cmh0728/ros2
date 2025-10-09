@@ -31,11 +31,13 @@ import subprocess
 
 class IPManager:
     def __init__(self, file_path):
+        """IP 주소를 갱신할 대상 파일 경로를 저장한다."""
         self.file_path = file_path
 
     def get_ip_address(self):
-        """Retrieve the current IP address of the machine."""
+        """현재 장비의 IP 주소를 조회한다."""
         try:
+            # hostname -I 는 모든 IPv4 주소를 반환하므로 첫 번째 항목을 사용한다.
             ip_output = subprocess.check_output("hostname -I", shell=True)
             ip_address = ip_output.decode('utf-8').strip().split()[0]
             return ip_address
@@ -44,16 +46,17 @@ class IPManager:
             return None
 
     def replace_ip_in_file(self):
-        """Replace the IP address in the specified file if it differs from the current IP."""
+        """현재 IP가 파일에 기록된 값과 다르면 새 IP로 치환한다."""
         new_ip = self.get_ip_address()
+        print("Success to retrieve IP address.")
         if not new_ip:
             print("Failed to retrieve IP address.")
             return
 
-        # Regular expression pattern to match IP addresses
+        # IPv4 형태의 문자열을 찾기 위한 정규식 패턴
         ip_pattern = r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'
 
-        # Read the file content
+        # 대상 파일을 읽어서 IP가 포함된 부분을 찾는다.
         try:
             with open(self.file_path, 'r') as file:
                 content = file.read()
@@ -61,26 +64,24 @@ class IPManager:
             print(f"File {self.file_path} not found.")
             return
 
-        # Search for the current IP address in the file
+        # 파일 내 기존 IP 주소를 추출한다.
         current_ip_match = re.search(ip_pattern, content)
         
         if current_ip_match:
             current_ip = current_ip_match.group()
             
-            # Check if the current IP is different from the new IP
+            # 현재 파일의 IP와 새로 조회한 IP가 동일한지 확인한다.
             if current_ip == new_ip:
                 print(f"The IP address in {self.file_path} is already {new_ip}. No changes made.")
                 return
             else:
-                # Replace the old IP address with the new one
+                # 기존 IP 문자열을 새 IP로 치환한다.
                 updated_content = re.sub(ip_pattern, new_ip, content)
                 
-                # Write the updated content back to the file
+                # 변경된 내용을 파일에 다시 기록한다.
                 with open(self.file_path, 'w') as file:
                     file.write(updated_content)
                 
                 print(f"Replaced IP address in {self.file_path} with {new_ip}")
         else:
             print(f"No IP address found in {self.file_path}.")
-
-
