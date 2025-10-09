@@ -1,9 +1,9 @@
 # Copyright (c) 2019, Bosch Engineering Center Cluj and BFMC organizers
 # All rights reserved.
-
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
-
+#
 # 1. Redistributions of source code must retain the above copyright notice, this
 #    list of conditions and the following disclaimer.
 # 2. Redistributions in binary form must reproduce the above copyright notice,
@@ -18,7 +18,6 @@
 import cv2
 import threading
 import base64
-# import picamera2
 import time
 import numpy as np
 
@@ -40,13 +39,14 @@ class UsbCamera:
     def __init__(self, device=0, main_size=(2048, 1080), lores_size=(512, 270), fps=30):
         self.main_size = tuple(main_size)
         self.lores_size = tuple(lores_size)
+        self.fps = int(fps)
 
-        # OpenCV VideoCapture (Jetson이면 GStreamer 파이프라인으로 바꿔도 됨)
+        # OpenCV VideoCapture (Jetson이면 GStreamer 파이프라인으로 대체 가능)
         self.cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
         # 해상도/프레임레이트 힌트
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,  self.main_size[0])
-        self.cap.set(cv2.CAP_PROP_HEIGHT, self.main_size[1] if hasattr(cv2, "CAP_PROP_HEIGHT") else self.main_size[1])
-        self.cap.set(cv2.CAP_PROP_FPS, fps)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.main_size[1])
+        self.cap.set(cv2.CAP_PROP_FPS, self.fps)
 
         if not self.cap.isOpened():
             raise RuntimeError(f"USB camera open failed on device {device}")
@@ -77,6 +77,7 @@ class UsbCamera:
 
     def set_controls(self, _controls: dict):
         # Picamera2 API 자리만 유지 (USB: 필요시 CAP_PROP_BRIGHTNESS/CONTRAST로 매핑 가능)
+        # 예: self.cap.set(cv2.CAP_PROP_BRIGHTNESS, value)
         pass
 
     def stop(self):
@@ -117,27 +118,36 @@ class threadCamera(ThreadWithStop):
 
     def Queue_Sending(self):
         """녹화 상태 플래그를 주기적으로 전송한다."""
+        if not self._running:
+            return
         self.recordingSender.send(self.recording)
         threading.Timer(1, self.Queue_Sending).start()
 
     # =============================== STOP ================================================
     def stop(self):
+        # 녹화 중이면 writer 정리
         if self.recording and self.video_writer:
             try:
                 self.video_writer.release()
             except Exception:
                 pass
+            finally:
+                self.video_writer = None
+
         # 카메라 릴리즈
         try:
-            if hasattr(self, "camera") and self.camera:
-                self.camera.stop()
+            self.camera.stop()
         except Exception:
             pass
+
         super(threadCamera, self).stop()
 
     # =============================== CONFIG ==============================================
     def Configs(self):
         """파이프를 통해 전달된 카메라 설정 값을 읽어 적용한다."""
+        if not self._running:
+            return
+
         if self.brightnessSubscriber.isDataInPipe():
             message = self.brightnessSubscriber.receive()
             if self.debugger:
@@ -167,42 +177,47 @@ class threadCamera(ThreadWithStop):
         """스레드가 동작 중일 때 카메라에서 프레임을 읽고 인코딩해 게이트웨이로 전달한다."""
         send = True
         while self._running:
+            # 녹화 제어 수신
             try:
                 recordRecv = self.recordSubscriber.receive()
                 if recordRecv is not None:
                     self.recording = bool(recordRecv)
-                    if recordRecv is False:
+                    if not self.recording:
                         if self.video_writer:
-                            self.video_writer.release()
+                            try:
+                                self.video_writer.release()
+                            except Exception:
+                                pass
                             self.video_writer = None
                     else:
-                        fourcc = cv2.VideoWriter_fourcc(*"XVID")
-                        self.video_writer = cv2.VideoWriter(
-                            "output_video" + str(time.time()) + ".avi",
-                            fourcc,
-                            self.frame_rate,
-                            (2048, 1080),
-                        )
+                        # 녹화 시작
+                        if self.video_writer is None:
+                            fourcc = cv2.VideoWriter_fourcc(*"XVID")
+                            main_w, main_h = self.camera.main_size
+                            self.video_writer = cv2.VideoWriter(
+                                f"output_video{time.time()}.avi",
+                                fourcc,
+                                self.frame_rate,
+                                (main_w, main_h),
+                            )
             except Exception as e:
-                print(e)
+                if self.debugger:
+                    self.logger.exception("record control error: %s", e)
 
+            # 프레임 수집/전송
             if send:
                 mainRequest = self.camera.capture_array("main")
                 serialRequest = self.camera.capture_array("lores")
 
-                if self.recording and self.video_writer:
-                    # 녹화 중이면 풀 해상도 프레임을 파일로 적재
+                # 녹화 중이면 저장
+                if self.recording and self.video_writer is not None:
                     try:
                         self.video_writer.write(mainRequest)
                     except Exception:
                         pass
 
-                # Picamera2(lores=I420)일 때만 필요. USB(UVC)는 이미 BGR → 예외 시 스킵
-                try:
-                    serialRequest = cv2.cvtColor(serialRequest, cv2.COLOR_YUV2BGR_I420)
-                except cv2.error:
-                    pass
-
+                # USB(UVC)는 이미 BGR이므로 변환 생략 (Picamera2만 I420 변환 필요)
+                # 직렬 전송용 JPEG 인코딩
                 _, mainEncodedImg = cv2.imencode(".jpg", mainRequest)
                 _, serialEncodedImg = cv2.imencode(".jpg", serialRequest)
 
@@ -212,7 +227,8 @@ class threadCamera(ThreadWithStop):
                 self.mainCameraSender.send(mainEncodedImageData)
                 self.serialCameraSender.send(serialEncodedImageData)
 
-            send = not send  # 한 번 전송 후 한 프레임 건너뛰어 부하 감소
+            # 부하 감소: 한 프레임 건너뛰기
+            send = not send
 
     # =============================== START ===============================================
     def start(self):
@@ -221,18 +237,6 @@ class threadCamera(ThreadWithStop):
     # ================================ INIT CAMERA ========================================
     def _init_camera(self):
         """카메라 객체를 초기화하고 main/lores 두 채널로 구성한다."""
-        # Picamera2 사용 버전(참고)
-        # self.camera = picamera2.Picamera2()
-        # config = self.camera.create_preview_configuration(
-        #     buffer_count=1,
-        #     queue=False,
-        #     main={"format": "RGB888", "size": (2048, 1080)},
-        #     lores={"size": (512, 270)},
-        #     encode="lores",
-        # )
-        # self.camera.configure(config)
-        # self.camera.start()
-
         # USB 카메라로 대체
         self.camera = UsbCamera(device=0, main_size=(2048, 1080), lores_size=(512, 270), fps=self.frame_rate or 30)
         self.camera.start()
