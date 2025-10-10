@@ -70,11 +70,13 @@ class threadWrite(ThreadWithStop):
 
         self.running = False
         self.engineEnabled = False
-        self.forceStop = False
-        self.stopApplied = False
+        self.forceStop = False  # 대시보드 STOP 모드 여부
+        self.stopApplied = False  # 정지 명령을 한 번만 전송하기 위한 플래그
         self.messageConverter = MessageConverter()
-        self.steerMotorSender = messageHandlerSender(self.queuesList, SteerMotor)
-        self.speedMotorSender = messageHandlerSender(self.queuesList, SpeedMotor)
+        self.steerMotorSender = messageHandlerSender(self.queuesList, SteerMotor) # steer
+        self.speedMotorSender = messageHandlerSender(self.queuesList, SpeedMotor) # speed
+        self.brakeSender = messageHandlerSender(self.queuesList, Brake) # brake
+        self.drivingModeSender = messageHandlerSender(self.queuesList, DrivingMode) # driving mode 
         self.configPath = "src/utils/table_state.json"
 
         self.loadConfig("init")
@@ -86,9 +88,10 @@ class threadWrite(ThreadWithStop):
             self.s = 0.0
             self.example()
 
-    def subscribe(self):
+    def subscribe(self): # 대쉬보드에서 gateway를 통해서 넘어오는 데이터 구독 
         """Subscribe function. In this function we make all the required subscribe to process gateway"""
 
+        # 대시보드에서 넘어오는 KL/주행모드/조향/속도/토글 신호를 구독 (fifo or last only 모드)
         self.klSubscriber = messageHandlerSubscriber(self.queuesList, Klem, "lastOnly", True)
         self.drivingModeSubscriber = messageHandlerSubscriber(self.queuesList, DrivingMode, "lastOnly", True)
         self.controlSubscriber = messageHandlerSubscriber(self.queuesList, Control, "lastOnly", True)
@@ -187,6 +190,7 @@ class threadWrite(ThreadWithStop):
                         command = {"action": "kl", "mode": 0}
                         self.sendToSerial(command)
 
+                # 엔진이 활성화되고 STOP 모드가 아닐 때만 주행 명령을 송신
                 if self.running and not self.forceStop:
                     if self.engineEnabled:
                         brakeRecv = self.brakeSubscriber.receive()

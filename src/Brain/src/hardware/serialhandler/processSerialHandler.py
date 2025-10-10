@@ -53,6 +53,7 @@ class processSerialHandler(WorkerProcess):
         logFile = "historyFile.txt"
 
         # comm init
+        # Nucleo 보드와의 직렬 통신 포트를 115200bps로 초기화
         self.serialCom = serial.Serial(devFile, 115200, timeout=0.1)
         self.serialCom.flushInput()
         self.serialCom.flushOutput()
@@ -75,8 +76,10 @@ class processSerialHandler(WorkerProcess):
     # ===================================== INIT TH =================================
     def _init_threads(self):
         """Initializes the read and the write thread."""
+        # 수신 스레드는 Nucleo → Jetson 데이터를 파이프라인 큐로 전달
         readTh = threadRead(self.serialCom, self.historyFile, self.queuesList, self.logger, self.debugging)
         self.threads.append(readTh)
+        # 송신 스레드는 큐에서 꺼낸 명령을 Nucleo로 전송
         writeTh = threadWrite(self.queuesList, self.serialCom, self.historyFile, self.logger, self.debugging, self.example)
         self.threads.append(writeTh)
 

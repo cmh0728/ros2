@@ -50,6 +50,7 @@ class MessageConverter:
         | 'KL'      : [ ['f_mode'],                  [int],                          [False]                ] - Enable/Diasble functions -
     """
 
+    # Nucleo 프로토콜 명령 키와 인자 형식을 정의한 매핑
     commands = {
         "speed": [["speed"], [3], [False]],
         "steer": [["steerAngle"], [3], [False]],
@@ -86,6 +87,7 @@ class MessageConverter:
             enhPrec = MessageConverter.commands[action][2][0]
             listKwargs = MessageConverter.commands[action][0]
 
+            # '#action:param;' 형태로 직렬 패킷 구성
             command = "#" + action + ":"
 
             for key in listKwargs:
@@ -126,4 +128,3 @@ class MessageConverter:
                 return False
 
         return True
-

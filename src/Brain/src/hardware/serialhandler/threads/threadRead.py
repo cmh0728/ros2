@@ -68,6 +68,7 @@ class threadRead(ThreadWithStop):
         self.currentSpeed = 0
         self.currentSteering = 0
 
+        # Nucleo 수신 데이터를 대시보드로 릴레이하기 위한 송신자들
         self.enableButtonSender = messageHandlerSender(self.queuesList, EnableButton)
         self.batteryLvlSender = messageHandlerSender(self.queuesList, BatteryLvl)
         self.instantConsumptionSender = messageHandlerSender(self.queuesList, InstantConsumption)
@@ -91,7 +92,7 @@ class threadRead(ThreadWithStop):
 
     # ====================================== RUN ==========================================
     def run(self):
-        buffer = ""  
+        buffer = ""  # 누적 버퍼에 Nucleo 프레임을 쌓아서 ';;' 단위로 분리
         while self._running:
             if self.serialCon.in_waiting > 0:
                 try:
@@ -112,6 +113,7 @@ class threadRead(ThreadWithStop):
     # ==================================== SENDING =======================================
     def Queue_Sending(self):
         """Callback function for enable button flag."""
+        # 주기적으로 EnableButton 신호를 송출해 대시보드가 KL 조작을 허용하도록 유지
         self.enableButtonSender.send(True)
         threading.Timer(1, self.Queue_Sending).start()
 
